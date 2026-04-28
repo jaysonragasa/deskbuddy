@@ -6,6 +6,7 @@
     <title>AI Robot Face</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
     <div class="main-container" id="main-container">
@@ -29,6 +30,13 @@
         
         <div class="subtitles-container" id="subtitles-container">
             <div class="subtitles-text" id="subtitles-text"></div>
+        </div>
+
+        <video id="vision-video" autoplay muted playsinline></video>
+
+        <div class="vision-debug" id="vision-debug">
+            <canvas id="vision-debug-canvas"></canvas>
+            <div class="vision-debug-label" id="vision-debug-label">No face</div>
         </div>
 
     </div>
@@ -87,6 +95,22 @@
                 <label style="margin:0;">Show AI Subtitles</label>
                 <label class="toggle-switch">
                     <input type="checkbox" id="toggle-subtitles">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="form-group setting-row">
+                <label style="margin:0;">Face Tracking (Vision)</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-vision">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="form-group setting-row">
+                <label style="margin:0;">Show Camera Debug Preview</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-vision-debug">
                     <span class="slider"></span>
                 </label>
             </div>
