@@ -39,10 +39,15 @@
             <div class="form-group">
                 <label>Ollama Server Endpoint</label>
                 <div class="input-row">
-                    <input type="text" id="ollama-url" placeholder="http://127.0.0.1:11434">
+                    <input type="text" id="ollama-url" placeholder="http://localhost:11434">
                     <button class="btn btn-secondary" id="btn-fetch-models" title="Refresh Models">↻</button>
                 </div>
-                <small style="color: #ffaa00; font-size: 0.75rem; margin-top: 5px;">Note: Run Ollama with OLLAMA_ORIGINS="*" before starting to allow web access.</small>
+                <div class="help-text">
+                    <strong>⚠️ Connection Blocked by Browser?</strong><br>
+                    To use your local AI on this web interface, you must authorize cross-origin requests (CORS).<br>
+                    <span style="color:var(--text-primary)">Windows Users:</span> Add <code>OLLAMA_ORIGINS="*"</code> to your System Environment Variables, quit Ollama entirely from the bottom-right system tray, and restart it.<br>
+                    <span style="color:var(--text-primary)">Mac / Linux / Termux (Android):</span> Run <code>OLLAMA_ORIGINS="*" ollama serve</code> in your terminal.
+                </div>
             </div>
             
             <div class="form-group">
