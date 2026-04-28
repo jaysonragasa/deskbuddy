@@ -40,6 +40,26 @@ window.addEventListener('DOMContentLoaded', () => {
     if (ollamaUrl) fetchModels();
 });
 
+const btnFullscreen = document.getElementById('btn-fullscreen');
+if (btnFullscreen) {
+    btnFullscreen.addEventListener('click', (e) => {
+        e.stopPropagation(); // prevent Settings from opening
+        if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+            document.exitFullscreen().catch(() => {});
+        }
+    });
+
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement) {
+            btnFullscreen.innerHTML = '⛶';
+        } else {
+            btnFullscreen.innerHTML = '✖';
+        }
+    });
+}
+
 // Wake Interaction
 mainContainer.addEventListener('click', () => {
     // If not initialized, initialize audio on first interaction
