@@ -5,6 +5,31 @@ let ollamaUrl = localStorage.getItem('ollamaUrl') || 'http://localhost:11434';
 let selectedModel = localStorage.getItem('selectedModel') || '';
 let showSubtitles = localStorage.getItem('showSubtitles') === 'true';
 let conversationContext = []; // Stores token history of conversation
+let idleTimeout = null;
+let isSleeping = false;
+
+function resetIdleTimer() {
+    if (isSleeping) {
+        isSleeping = false;
+        setEmotion('woke-up');
+        speakText("Hey there!").then(() => {
+            if (wrapper.className.includes('emotion-woke-up')) {
+                setEmotion('neutral');
+            }
+        });
+    }
+
+    clearTimeout(idleTimeout);
+    if (!isSystemSpeaking) {
+        idleTimeout = setTimeout(() => {
+            isSleeping = true;
+            setEmotion('sleeping');
+        }, 60000); // 1 minute
+    }
+}
+
+window.addEventListener('mousemove', resetIdleTimer);
+window.addEventListener('keydown', resetIdleTimer);
 
 // DOM Elements
 const wrapper = document.getElementById('eyes-wrapper');
@@ -236,7 +261,7 @@ async function handlePrompt(promptText) {
     const systemPrompt = `You are a standalone animated AI face interface.
 Always communicate conversationally, warmly, and naturally.
 Respond natively in English if you are spoken to in English.
-CRITICAL RULE: You MUST begin EVERY response with exactly ONE of the following tags that best matches your emotion: [neutral], [happy], [sad], [angry], [surprised].
+CRITICAL RULE: You MUST begin EVERY response with exactly ONE of the following tags that best matches your emotion: [neutral], [happy], [sad], [angry], [surprised], [wink], [curious], [skeptical], [drowsy], [sleeping], [woke up], [shocked].
 Do not include any other markdown or tags. Keep answers short and concise.`;
 
     try {
@@ -268,9 +293,9 @@ Do not include any other markdown or tags. Keep answers short and concise.`;
         
         // Extract Emotion match
         let emotion = 'neutral';
-        const emoMatch = aiText.match(/\[(neutral|happy|sad|angry|surprised)\]/i);
+        const emoMatch = aiText.match(/\[(neutral|happy|sad|angry|surprised|wink|curious|skeptical|drowsy|sleeping|woke up|shocked)\]/i);
         if (emoMatch) {
-            emotion = emoMatch[1].toLowerCase();
+            emotion = emoMatch[1].toLowerCase().replace(' ', '-');
         }
 
         // Remove tag for TTS reading
@@ -337,12 +362,14 @@ function speakText(text) {
             clearInterval(talkingInterval);
             isSystemSpeaking = false;
             wrapper.style.transform = `translate(0px, 0px) rotate(0deg)`;
+            resetIdleTimer();
             resolve();
         };
         utterance.onerror = () => {
             clearInterval(talkingInterval);
             isSystemSpeaking = false;
             wrapper.style.transform = `translate(0px, 0px) rotate(0deg)`;
+            resetIdleTimer();
             resolve();
         };
 
@@ -374,6 +401,8 @@ function initSpeechRecognition() {
 
     recognition.onresult = async (event) => {
         if (isSystemSpeaking) return; // Prevent mic feedback loop
+        
+        resetIdleTimer();
 
         const last = event.resultIndex;
         const transcript = event.results[last][0].transcript.trim();

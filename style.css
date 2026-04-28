@@ -132,6 +132,86 @@ body, html {
     border-radius: 60px;
 }
 
+/* New Emotions */
+.emotion-wink .left-eye {
+    transform: scaleY(0.1);
+}
+
+.emotion-curious .left-eye { height: 260px; }
+.emotion-curious .right-eye { 
+    height: 180px; 
+    border-radius: 60px;
+    transform: scaleX(0.85); 
+}
+.emotion-curious { transform: rotate(8deg); }
+
+.emotion-skeptical .top-lid {
+    top: -70%;
+    transform: rotate(2deg);
+    border-radius: 0;
+}
+.emotion-skeptical .bottom-lid {
+    bottom: -70%;
+    transform: rotate(-2deg);
+    border-radius: 0;
+}
+.emotion-skeptical .eye { height: 180px; }
+.emotion-skeptical .right-eye .top-lid { transform: rotate(-5deg); top: -60%; }
+
+.emotion-drowsy .top-lid {
+    top: -55%;
+    border-radius: 30% 30% 5% 5%;
+}
+.emotion-drowsy .bottom-lid {
+    bottom: -65%;
+    border-radius: 5% 5% 30% 30%;
+}
+.emotion-drowsy .eye { height: 140px; }
+
+.emotion-sleeping .eye {
+    opacity: 0.4;
+    transform: scaleY(0.08);
+    filter: drop-shadow(0 0 5px var(--text-secondary));
+}
+.eyes-wrapper.emotion-sleeping::after {
+    content: 'Zzz';
+    position: absolute;
+    top: -70px;
+    right: -120px;
+    font-size: 3rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    animation: zzzAnim 3s ease-in-out infinite;
+    text-shadow: 0 0 10px var(--text-secondary);
+    pointer-events: none;
+}
+@keyframes zzzAnim {
+    0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
+    50% { opacity: 1; transform: translate(30px, -40px) scale(1.2); }
+    100% { opacity: 0; transform: translate(50px, -80px) scale(1.5); }
+}
+
+.emotion-shocked .eye {
+    height: 310px;
+    width: 140px;
+    border-radius: 40px;
+    background-color: #fff;
+    box-shadow: inset 0 0 30px #00e5ff;
+}
+
+.emotion-woke-up .eye {
+    height: 280px;
+    border-radius: 60px;
+    animation: jitter 0.15s infinite;
+}
+@keyframes jitter {
+    0% { transform: translate(0, 0); }
+    25% { transform: translate(3px, -2px); }
+    50% { transform: translate(-3px, 3px); }
+    75% { transform: translate(2px, 2px); }
+    100% { transform: translate(-2px, -3px); }
+}
+
 /* Blinking */
 @keyframes blinkAnim {
     0%, 100% { transform: scaleY(1); }
