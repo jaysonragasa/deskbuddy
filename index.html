@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Robot Face</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="main-container" id="main-container">
+        
+        <div class="tap-overlay" id="tap-overlay">
+            <h1>TAP ANYWHERE TO WAKE</h1>
+        </div>
+
+        <div class="eyes-wrapper emotion-neutral" id="eyes-wrapper">
+            <div class="eye left-eye">
+                <div class="eye-lid top-lid"></div>
+                <div class="eye-lid bottom-lid"></div>
+            </div>
+            <div class="eye right-eye">
+                <div class="eye-lid top-lid"></div>
+                <div class="eye-lid bottom-lid"></div>
+            </div>
+        </div>
+        
+        <div class="subtitles-container" id="subtitles-container">
+            <div class="subtitles-text" id="subtitles-text"></div>
+        </div>
+
+    </div>
+
+    <!-- Settings Menu Overlay -->
+    <div class="settings-overlay" id="settings-overlay">
+        <div class="settings-panel">
+            <h2>AI Interface Settings</h2>
+            
+            <div class="form-group">
+                <label>Ollama Server Endpoint</label>
+                <div class="input-row">
+                    <input type="text" id="ollama-url" placeholder="http://127.0.0.1:11434">
+                    <button class="btn btn-secondary" id="btn-fetch-models" title="Refresh Models">↻</button>
+                </div>
+                <small style="color: #ffaa00; font-size: 0.75rem; margin-top: 5px;">Note: Run Ollama with OLLAMA_ORIGINS="*" before starting to allow web access.</small>
+            </div>
+            
+            <div class="form-group">
+                <label>Select Local Model</label>
+                <select id="ollama-model">
+                    <option value="">Load models first...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label>Test Prompt (AI Response)</label>
+                <textarea id="test-message" rows="3" placeholder="Kumusta ka?"></textarea>
+                <button class="btn btn-primary" id="btn-send-test">Send to AI / Test Voice</button>
+            </div>
+            
+            <div class="form-group">
+                <label>Emotion Testing Presets</label>
+                <div class="emotion-buttons">
+                    <button class="btn btn-sm" data-emotion="neutral">Neutral</button>
+                    <button class="btn btn-sm" data-emotion="happy">Happy</button>
+                    <button class="btn btn-sm" data-emotion="sad">Sad</button>
+                    <button class="btn btn-sm" data-emotion="angry">Angry</button>
+                    <button class="btn btn-sm" data-emotion="surprised">Surprised</button>
+                </div>
+            </div>
+            
+            <div class="form-group setting-row">
+                <label style="margin:0;">Show AI Subtitles</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-subtitles">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            
+            <button class="btn btn-secondary" id="btn-clear-memory" style="font-size: 0.95rem; padding: 10px;">Clear Conversation Memory</button>
+            
+            <div class="status-box">
+                <span id="status-text">Waiting to wake...</span>
+                <div class="status-indicator" id="status-indicator"></div>
+            </div>
+            
+            <button class="btn btn-close" id="btn-close-settings">Close Settings / Return to Face</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
