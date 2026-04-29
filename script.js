@@ -23,6 +23,17 @@ const FACE_INPUT_GAIN = 2.2;   // amplify small head movements before clamping
 const FACE_RESPONSE_POWER = 0.7; // <1 makes small moves more visible (ease-out curve)
 const FACE_SMOOTHING = 0.22;   // 0..1, higher = snappier
 
+// Motion-based wake: a user moving in front of the camera counts as activity
+// (but a statically-visible face does not). Both gates must trip:
+//   - center must move at least FACE_MOTION_MIN_DELTA (video-normalized, so
+//     it's resolution-independent),
+//   - at least FACE_MOTION_MIN_INTERVAL_MS must have passed since the last
+//     vision-driven reset, to avoid thrashing the timers.
+const FACE_MOTION_MIN_DELTA = 0.06;       // ~6% of the frame width/height
+const FACE_MOTION_MIN_INTERVAL_MS = 2000; // same cadence as the mouse gate
+let lastFaceCenter = null;                // {cx, cy} in 0..1 coords
+let lastFaceMotionResetAt = 0;
+
 // Greeting behavior: trigger when a face appears after being absent long enough
 const FACE_GREETING_COOLDOWN_MS = 20000; // minimum time between greetings
 const FACE_ABSENCE_FOR_GREET_MS = 5000;  // face must be absent this long to re-greet
@@ -773,12 +784,23 @@ function startVisionLoop() {
             faceTarget.y = shapedY * FACE_MAX_OFFSET_Y;
             faceTarget.active = true;
 
-            // NOTE: a statically visible face is NOT activity. Previously this
-            // called resetIdleTimer() every 5s, which prevented idle-alive and
-            // sleep modes from ever firing while the user sat in front of the
-            // camera. Activity is driven by real user input (keydown, real mouse
-            // movement, speech, button clicks) and by the greeting path below.
+            // A statically-visible face is NOT activity (otherwise idle-alive
+            // and sleep would never fire while you sit at your desk). But a
+            // face that *moves* meaningfully is activity: turning your head,
+            // leaning in, waving into frame. Gate on distance + interval so
+            // sensor noise can't keep poking the timer.
             const now = Date.now();
+            if (lastFaceCenter) {
+                const dx = cx - lastFaceCenter.cx;
+                const dy = cy - lastFaceCenter.cy;
+                const delta = Math.hypot(dx, dy);
+                if (delta >= FACE_MOTION_MIN_DELTA &&
+                    now - lastFaceMotionResetAt >= FACE_MOTION_MIN_INTERVAL_MS) {
+                    lastFaceMotionResetAt = now;
+                    resetIdleTimer();
+                }
+            }
+            lastFaceCenter = { cx, cy };
 
             // Greet when a face appears after an absence, with a cooldown
             const wasAbsent = (now - lastFaceSeenAt) > FACE_ABSENCE_FOR_GREET_MS;
@@ -794,6 +816,9 @@ function startVisionLoop() {
             faceTarget.active = false;
             faceTarget.x = 0;
             faceTarget.y = 0;
+            // Clear the motion baseline so a reappearing face doesn't
+            // register a huge spurious delta against a stale position.
+            lastFaceCenter = null;
         }
 
         // Debug preview render
