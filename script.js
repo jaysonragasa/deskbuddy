@@ -7,7 +7,6 @@ let showSubtitles = localStorage.getItem('showSubtitles') === 'true';
 let visionEnabled = localStorage.getItem('visionEnabled') === 'true';
 let visionDebug = localStorage.getItem('visionDebug') === 'true';
 let conversationContext = []; // Stores token history of conversation
-let idleTimeout = null;
 let isSleeping = false;
 
 // Vision / face-tracking state
@@ -31,6 +30,89 @@ let lastFaceSeenAt = 0;
 let lastGreetingAt = 0;
 let isGreeting = false;
 
+// Idle behavior timing
+const IDLE_ALIVE_AFTER_MS = 60000;        // 1 min: enter "alive" idle mode
+const IDLE_SLEEP_AFTER_MS = 180000;       // 3 min: go to sleep
+const IDLE_ALIVE_EMOTION_MS = 15000;      // swap to a random emotion every 30s
+const IDLE_ALIVE_MOVE_MIN_MS = 1200;      // eye wander cadence
+const IDLE_ALIVE_MOVE_MAX_MS = 2600;
+
+const IDLE_ALIVE_EMOTIONS = [
+    'happy', 'curious', 'skeptical', 'surprised',
+    'drowsy', 'wink', 'neutral', 'sad'
+];
+
+let idleAliveTimeout = null;
+let idleSleepTimeout = null;
+let idleEmotionInterval = null;
+let idleMoveTimeout = null;
+let isIdleAlive = false;
+
+function clearIdleTimers() {
+    clearTimeout(idleAliveTimeout);
+    clearTimeout(idleSleepTimeout);
+    clearInterval(idleEmotionInterval);
+    clearTimeout(idleMoveTimeout);
+    idleAliveTimeout = null;
+    idleSleepTimeout = null;
+    idleEmotionInterval = null;
+    idleMoveTimeout = null;
+}
+
+function stopIdleAlive() {
+    if (!isIdleAlive) return;
+    isIdleAlive = false;
+    clearInterval(idleEmotionInterval);
+    clearTimeout(idleMoveTimeout);
+    idleEmotionInterval = null;
+    idleMoveTimeout = null;
+}
+
+function startIdleAlive() {
+    if (isIdleAlive || isSleeping || isSystemSpeaking) return;
+    isIdleAlive = true;
+
+    // Pick a fresh random emotion every 30s.
+    const pickEmotion = () => {
+        if (!isIdleAlive || isSystemSpeaking || isSleeping) return;
+        const emo = IDLE_ALIVE_EMOTIONS[Math.floor(Math.random() * IDLE_ALIVE_EMOTIONS.length)];
+        setEmotion(emo);
+    };
+    pickEmotion(); // kick off immediately
+    idleEmotionInterval = setInterval(pickEmotion, IDLE_ALIVE_EMOTION_MS);
+
+    // Livelier wandering: bigger range, shorter cadence.
+    const wander = () => {
+        if (!isIdleAlive || isSystemSpeaking || isSleeping) return;
+        // Don't fight face tracking if a face is present
+        if (faceTarget.active) {
+            idleMoveTimeout = setTimeout(wander, 800);
+            return;
+        }
+
+        const x = (Math.random() - 0.5) * 180; // -90..90
+        const y = (Math.random() - 0.5) * 120; // -60..60
+        const angle = (Math.random() - 0.5) * 20; // -10..10 deg
+        wrapper.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) rotate(${angle.toFixed(1)}deg)`;
+
+        // Occasional double-blink for personality
+        if (Math.random() > 0.75) {
+            triggerBlink();
+            setTimeout(triggerBlink, 220);
+        }
+
+        const next = IDLE_ALIVE_MOVE_MIN_MS + Math.random() * (IDLE_ALIVE_MOVE_MAX_MS - IDLE_ALIVE_MOVE_MIN_MS);
+        idleMoveTimeout = setTimeout(wander, next);
+    };
+    wander();
+}
+
+function goToSleep() {
+    stopIdleAlive();
+    isSleeping = true;
+    setEmotion('sleeping');
+}
+
 function resetIdleTimer() {
     if (isSleeping) {
         isSleeping = false;
@@ -42,17 +124,50 @@ function resetIdleTimer() {
         });
     }
 
-    clearTimeout(idleTimeout);
-    if (!isSystemSpeaking) {
-        idleTimeout = setTimeout(() => {
-            isSleeping = true;
-            setEmotion('sleeping');
-        }, 60000); // 1 minute
+    if (isIdleAlive) {
+        stopIdleAlive();
+        setEmotion('neutral');
     }
+
+    clearIdleTimers();
+    if (isSystemSpeaking) return;
+
+    idleAliveTimeout = setTimeout(startIdleAlive, IDLE_ALIVE_AFTER_MS);
+    idleSleepTimeout = setTimeout(goToSleep, IDLE_SLEEP_AFTER_MS);
 }
 
-window.addEventListener('mousemove', resetIdleTimer);
+// Mouse movement is noisy: trackpads, screen refresh artifacts, and even a
+// still hand can emit mousemove events. Only count movement as activity when
+// the pointer actually travels a meaningful distance AND enough time has
+// passed since the last reset. Without this gate, idle-alive and sleep modes
+// never fire on a typical desk setup.
+const IDLE_MOUSE_MIN_DISTANCE_PX = 40;   // must travel at least this far
+const IDLE_MOUSE_MIN_INTERVAL_MS = 2000; // ...within this interval
+let _idleLastMouseX = null;
+let _idleLastMouseY = null;
+let _idleLastMouseResetAt = 0;
+
+window.addEventListener('mousemove', (e) => {
+    const now = Date.now();
+    if (_idleLastMouseX === null) {
+        _idleLastMouseX = e.clientX;
+        _idleLastMouseY = e.clientY;
+        return;
+    }
+    const dx = e.clientX - _idleLastMouseX;
+    const dy = e.clientY - _idleLastMouseY;
+    const dist = Math.hypot(dx, dy);
+    if (dist < IDLE_MOUSE_MIN_DISTANCE_PX) return;
+    if (now - _idleLastMouseResetAt < IDLE_MOUSE_MIN_INTERVAL_MS) return;
+
+    _idleLastMouseX = e.clientX;
+    _idleLastMouseY = e.clientY;
+    _idleLastMouseResetAt = now;
+    resetIdleTimer();
+});
+
 window.addEventListener('keydown', resetIdleTimer);
+window.addEventListener('pointerdown', resetIdleTimer);
 
 // DOM Elements
 const wrapper = document.getElementById('eyes-wrapper');
@@ -124,6 +239,7 @@ function applyVisionDebugVisibility() {
 window.addEventListener('DOMContentLoaded', () => {
     startRandomBlinking();
     startRandomMovements();
+    resetIdleTimer(); // arm the idle-alive and sleep timers from the start
     if (ollamaUrl) fetchModels();
 });
 
@@ -270,6 +386,7 @@ function startRandomMovements() {
     setInterval(() => {
         if (isSystemSpeaking) return; // Don't interfere with talking nod
         if (faceTarget.active) return; // Don't interfere with face tracking
+        if (isIdleAlive) return;       // Idle-alive mode drives its own wander
 
         // 60% chance to look around gracefully
         if (Math.random() > 0.4) {
@@ -643,8 +760,14 @@ function startVisionLoop() {
             faceTarget.y = shapedY * FACE_MAX_OFFSET_Y;
             faceTarget.active = true;
 
-            // Greet when a face appears after an absence, with a cooldown
+            // NOTE: a statically visible face is NOT activity. Previously this
+            // called resetIdleTimer() every 5s, which prevented idle-alive and
+            // sleep modes from ever firing while the user sat in front of the
+            // camera. Activity is driven by real user input (keydown, real mouse
+            // movement, speech, button clicks) and by the greeting path below.
             const now = Date.now();
+
+            // Greet when a face appears after an absence, with a cooldown
             const wasAbsent = (now - lastFaceSeenAt) > FACE_ABSENCE_FOR_GREET_MS;
             const offCooldown = (now - lastGreetingAt) > FACE_GREETING_COOLDOWN_MS;
             if (!isGreeting && !isSystemSpeaking && wasAbsent && offCooldown) {
