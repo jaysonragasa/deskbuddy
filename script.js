@@ -38,8 +38,7 @@ const IDLE_ALIVE_MOVE_MIN_MS = 1200;      // eye wander cadence
 const IDLE_ALIVE_MOVE_MAX_MS = 2600;
 
 const IDLE_ALIVE_EMOTIONS = [
-    'happy', 'curious', 'skeptical', 'surprised',
-    'drowsy', 'wink', 'neutral', 'sad'
+    'happy', 'curious', 'skeptical', 'surprised', 'wink', 'neutral', 'sad'
 ];
 
 let idleAliveTimeout = null;
@@ -587,16 +586,30 @@ function initSpeechRecognition() {
 
     recognition.onresult = async (event) => {
         if (isSystemSpeaking) return; // Prevent mic feedback loop
-        
-        resetIdleTimer();
 
         const last = event.resultIndex;
         const transcript = event.results[last][0].transcript.trim();
 
-        if (transcript) {
-            statusText.innerText = `Heard: "${transcript}"`;
-            await handlePrompt(transcript);
+        // Ignore empty transcripts entirely. The SpeechRecognition API
+        // intermittently fires `onresult` for ambient noise / breathing with
+        // an empty or single-token string. Treating those as activity kept
+        // resetting the idle timer and prevented idle-alive / sleep modes
+        // from ever firing while the mic was listening.
+        if (!transcript) return;
+
+        // Filter obvious noise artifacts: very short single tokens are almost
+        // always mis-recognized ambient sound, not a real command.
+        const isLikelyNoise = transcript.length < 2 ||
+            /^(uh|um|hmm|mm|ah|oh|eh|a|e|o)\.?$/i.test(transcript);
+        if (isLikelyNoise) {
+            console.debug('ignoring likely-noise transcript:', transcript);
+            return;
         }
+
+        // Real speech detected — this counts as user activity.
+        resetIdleTimer();
+        statusText.innerText = `Heard: "${transcript}"`;
+        await handlePrompt(transcript);
     };
 
     recognition.onerror = (e) => {
