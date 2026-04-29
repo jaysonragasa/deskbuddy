@@ -15,8 +15,14 @@ let isSleeping = false;
 const KOKORO_MODULE_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
 const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const KOKORO_DTYPE = 'q8'; // ~90MB; good balance of size and quality
+// Device: kokoro-js's own README says WebGPU needs dtype="fp32" to work
+// correctly. With q8 quantization on WebGPU, ORT substitutes fallback
+// kernels for unsupported int8 ops and produces speech-shaped garbage
+// ("alien babble"). So q8 -> wasm, always. Set `kokoroForceWasm=false`
+// in localStorage to experiment otherwise, at your own risk.
+const KOKORO_DEVICE = 'wasm';
 let kokoroEnabled = localStorage.getItem('kokoroEnabled') === 'true';
-let kokoroVoice = localStorage.getItem('kokoroVoice') || 'af_heart';
+let kokoroVoice = localStorage.getItem('kokoroVoice') || 'bm_fable';
 let kokoroSpeed = parseFloat(localStorage.getItem('kokoroSpeed')) || 1.0;
 let kokoroTTS = null;           // cached KokoroTTS instance
 let kokoroLoadPromise = null;   // in-flight load, so concurrent calls share it
@@ -659,7 +665,11 @@ async function loadKokoroTTS() {
         }
 
         const { KokoroTTS } = mod;
-        const device = (navigator.gpu ? 'webgpu' : 'wasm');
+
+        // Device is pinned to "wasm" — see KOKORO_DEVICE comment at the
+        // top of the file for why WebGPU + q8 produces gibberish.
+        const device = KOKORO_DEVICE;
+        console.debug('[kokoro] device:', device, 'dtype:', KOKORO_DTYPE);
 
         statusText.innerText = `Downloading voice model (${device})...`;
 
@@ -730,10 +740,28 @@ function populateKokoroVoices() {
 }
 
 async function speakWithKokoro(text) {
+    // Paranoia: Kokoro's phonemizer chokes on stray brackets and produces
+    // garbage audio. handlePrompt already strips emotion tags, but this
+    // guard makes the TTS path robust against any caller.
+    const cleaned = String(text).replace(/\[[^\]]*\]/g, '').trim();
+    if (!cleaned) return;
+
     const tts = await loadKokoroTTS();
 
-    const audio = await tts.generate(text, {
-        voice: kokoroVoice,
+    // Diagnostic: log which voice we're actually using and what phonemes the
+    // phonemizer produced. If phonemes look like random non-English IPA or
+    // are empty, the phonemizer (espeak-ng via the `phonemizer` package) is
+    // the culprit — not the model. If phonemes look like reasonable English
+    // IPA but the audio is still gibberish, the ONNX backend is the culprit.
+    const voiceToUse = kokoroVoice || 'af_heart';
+    console.debug('[kokoro] generating:', {
+        text: cleaned,
+        voice: voiceToUse,
+        speed: kokoroSpeed
+    });
+
+    const audio = await tts.generate(cleaned, {
+        voice: voiceToUse,
         speed: Number.isFinite(kokoroSpeed) ? kokoroSpeed : 1.0
     });
     const blob = audio.toBlob();
