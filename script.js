@@ -9,6 +9,19 @@ let visionDebug = localStorage.getItem('visionDebug') === 'true';
 let conversationContext = []; // Stores token history of conversation
 let isSleeping = false;
 
+// Kokoro TTS (optional, in-browser via transformers.js). When enabled and
+// successfully loaded, it replaces SpeechSynthesisUtterance for a much more
+// natural voice. Falls back silently to Web Speech on any failure.
+const KOKORO_MODULE_URL = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js';
+const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+const KOKORO_DTYPE = 'q8'; // ~90MB; good balance of size and quality
+let kokoroEnabled = localStorage.getItem('kokoroEnabled') === 'true';
+let kokoroVoice = localStorage.getItem('kokoroVoice') || 'af_heart';
+let kokoroSpeed = parseFloat(localStorage.getItem('kokoroSpeed')) || 1.0;
+let kokoroTTS = null;           // cached KokoroTTS instance
+let kokoroLoadPromise = null;   // in-flight load, so concurrent calls share it
+let kokoroAudio = null;         // currently-playing HTMLAudioElement
+
 // Vision / face-tracking state
 let visionInitialized = false;
 let visionStream = null;
@@ -246,11 +259,53 @@ function applyVisionDebugVisibility() {
     }
 }
 
+// ---- Kokoro TTS settings wiring ----
+const toggleKokoro = document.getElementById('toggle-kokoro');
+const kokoroVoiceSelect = document.getElementById('kokoro-voice');
+const kokoroSpeedInput = document.getElementById('kokoro-speed');
+const kokoroSpeedValue = document.getElementById('kokoro-speed-value');
+
+if (toggleKokoro) {
+    toggleKokoro.checked = kokoroEnabled;
+    toggleKokoro.addEventListener('change', (e) => {
+        kokoroEnabled = e.target.checked;
+        localStorage.setItem('kokoroEnabled', kokoroEnabled);
+        if (kokoroEnabled) {
+            // Kick off the load now so the first spoken turn doesn't eat
+            // the cost. Errors are surfaced via statusText but are non-fatal.
+            loadKokoroTTS().catch((err) => {
+                console.warn('Kokoro load failed:', err && err.message);
+            });
+        }
+    });
+}
+if (kokoroSpeedInput) {
+    kokoroSpeedInput.value = kokoroSpeed;
+    if (kokoroSpeedValue) kokoroSpeedValue.innerText = kokoroSpeed.toFixed(2);
+    kokoroSpeedInput.addEventListener('input', (e) => {
+        kokoroSpeed = parseFloat(e.target.value);
+        if (kokoroSpeedValue) kokoroSpeedValue.innerText = kokoroSpeed.toFixed(2);
+        localStorage.setItem('kokoroSpeed', kokoroSpeed);
+    });
+}
+if (kokoroVoiceSelect) {
+    kokoroVoiceSelect.addEventListener('change', (e) => {
+        kokoroVoice = e.target.value;
+        localStorage.setItem('kokoroVoice', kokoroVoice);
+    });
+}
+
 window.addEventListener('DOMContentLoaded', () => {
     startRandomBlinking();
     startRandomMovements();
     resetIdleTimer(); // arm the idle-alive and sleep timers from the start
     if (ollamaUrl) fetchModels();
+    if (kokoroEnabled) {
+        // Warm up the model in the background so the first turn is snappy.
+        loadKokoroTTS().catch((err) => {
+            console.warn('Kokoro warm-up failed:', err && err.message);
+        });
+    }
 });
 
 const btnFullscreen = document.getElementById('btn-fullscreen');
@@ -529,47 +584,180 @@ Do not include any other markdown or tags. Keep answers short and concise.`;
 }
 
 // Text to Speech
+// Tries Kokoro TTS first when enabled and successfully loaded, falls back to
+// the browser's SpeechSynthesis API on any failure. The talking-head nod
+// animation and the isSystemSpeaking lifecycle are identical for both paths.
 function speakText(text) {
+    if (!text) return Promise.resolve();
+    if (kokoroEnabled) {
+        return speakWithKokoro(text).catch((err) => {
+            console.warn('Kokoro TTS failed, falling back to Web Speech:', err && err.message);
+            return speakWithWebSpeech(text);
+        });
+    }
+    return speakWithWebSpeech(text);
+}
+
+function startTalkingAnimation() {
+    isSystemSpeaking = true;
+    let nodUp = false;
+    const handle = setInterval(() => {
+        nodUp = !nodUp;
+        const y = nodUp ? -12 : 8;
+        const angle = (Math.random() - 0.5) * 6;
+        wrapper.style.transform = `translate(0px, ${y}px) rotate(${angle}deg)`;
+        if (Math.random() > 0.7) triggerBlink();
+    }, 400);
+    return handle;
+}
+
+function stopTalkingAnimation(handle) {
+    clearInterval(handle);
+    isSystemSpeaking = false;
+    wrapper.style.transform = `translate(0px, 0px) rotate(0deg)`;
+    resetIdleTimer();
+}
+
+function speakWithWebSpeech(text) {
     return new Promise((resolve) => {
         if (!text) { resolve(); return; }
-
-        isSystemSpeaking = true;
         const utterance = new SpeechSynthesisUtterance(text);
-
         const voices = window.speechSynthesis.getVoices();
         // Give preference to language/region if available
         const tlVoice = voices.find(v => v.lang.includes('tl') || v.lang.includes('PH'));
-        if (tlVoice) {
-            utterance.voice = tlVoice;
-        }
+        if (tlVoice) utterance.voice = tlVoice;
 
-        // Animate lips/eyes slightly while speaking
-        let nodUp = false;
-        const talkingInterval = setInterval(() => {
-            nodUp = !nodUp;
-            const y = nodUp ? -12 : 8;
-            const angle = (Math.random() - 0.5) * 6; // Slight head wobble
-            wrapper.style.transform = `translate(0px, ${y}px) rotate(${angle}deg)`;
-            
-            if (Math.random() > 0.7) triggerBlink();
-        }, 400);
+        const talkingInterval = startTalkingAnimation();
 
-        utterance.onend = () => {
-            clearInterval(talkingInterval);
-            isSystemSpeaking = false;
-            wrapper.style.transform = `translate(0px, 0px) rotate(0deg)`;
-            resetIdleTimer();
-            resolve();
-        };
-        utterance.onerror = () => {
-            clearInterval(talkingInterval);
-            isSystemSpeaking = false;
-            wrapper.style.transform = `translate(0px, 0px) rotate(0deg)`;
-            resetIdleTimer();
-            resolve();
-        };
+        utterance.onend = () => { stopTalkingAnimation(talkingInterval); resolve(); };
+        utterance.onerror = () => { stopTalkingAnimation(talkingInterval); resolve(); };
 
         window.speechSynthesis.speak(utterance);
+    });
+}
+
+// ---- Kokoro TTS (in-browser, ES module from jsDelivr) ----
+// We dynamically import kokoro-js on first use so users who never enable it
+// don't pay the ~90 MB model download. Subsequent calls reuse the cached
+// KokoroTTS instance. Progress is surfaced via statusText.
+async function loadKokoroTTS() {
+    if (kokoroTTS) return kokoroTTS;
+    if (kokoroLoadPromise) return kokoroLoadPromise;
+
+    kokoroLoadPromise = (async () => {
+        const prevStatus = statusText.innerText;
+        statusText.innerText = 'Loading Kokoro module...';
+        statusIndicator.className = 'status-indicator processing';
+
+        let mod;
+        try {
+            mod = await import(KOKORO_MODULE_URL);
+        } catch (err) {
+            statusText.innerText = 'Kokoro unavailable (using browser voice)';
+            statusIndicator.className = 'status-indicator';
+            throw err;
+        }
+
+        const { KokoroTTS } = mod;
+        const device = (navigator.gpu ? 'webgpu' : 'wasm');
+
+        statusText.innerText = `Downloading voice model (${device})...`;
+
+        let lastPct = -1;
+        const progress_callback = (data) => {
+            if (!data) return;
+            // transformers.js emits { status, progress, file, ... }
+            if (data.status === 'progress' && typeof data.progress === 'number') {
+                const pct = Math.floor(data.progress);
+                if (pct !== lastPct) {
+                    lastPct = pct;
+                    statusText.innerText = `Downloading voice model... ${pct}%`;
+                }
+            } else if (data.status === 'ready' || data.status === 'done') {
+                statusText.innerText = 'Voice model ready';
+            }
+        };
+
+        try {
+            kokoroTTS = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+                dtype: KOKORO_DTYPE,
+                device,
+                progress_callback
+            });
+        } catch (err) {
+            kokoroLoadPromise = null;
+            statusText.innerText = 'Kokoro load failed (using browser voice)';
+            statusIndicator.className = 'status-indicator';
+            throw err;
+        }
+
+        // Populate the voice dropdown now that we know what the model supports.
+        populateKokoroVoices();
+
+        statusText.innerText = prevStatus && !prevStatus.startsWith('Downloading')
+            ? prevStatus
+            : 'Voice model ready';
+        statusIndicator.className = 'status-indicator listening';
+        return kokoroTTS;
+    })();
+
+    return kokoroLoadPromise;
+}
+
+function populateKokoroVoices() {
+    if (!kokoroVoiceSelect || !kokoroTTS || !kokoroTTS.voices) return;
+    const voiceIds = Object.keys(kokoroTTS.voices);
+    if (voiceIds.length === 0) return;
+
+    kokoroVoiceSelect.innerHTML = '';
+    for (const id of voiceIds) {
+        const meta = kokoroTTS.voices[id] || {};
+        const opt = document.createElement('option');
+        opt.value = id;
+        // e.g. "af_heart — American English 🚺 (A)"
+        const label = [id, meta.language, meta.gender, meta.overallGrade && `(${meta.overallGrade})`]
+            .filter(Boolean)
+            .join(' · ');
+        opt.textContent = label;
+        if (id === kokoroVoice) opt.selected = true;
+        kokoroVoiceSelect.appendChild(opt);
+    }
+    if (!voiceIds.includes(kokoroVoice)) {
+        kokoroVoice = voiceIds[0];
+        kokoroVoiceSelect.value = kokoroVoice;
+        localStorage.setItem('kokoroVoice', kokoroVoice);
+    }
+}
+
+async function speakWithKokoro(text) {
+    const tts = await loadKokoroTTS();
+
+    const audio = await tts.generate(text, {
+        voice: kokoroVoice,
+        speed: Number.isFinite(kokoroSpeed) ? kokoroSpeed : 1.0
+    });
+    const blob = audio.toBlob();
+    const audioUrl = URL.createObjectURL(blob);
+
+    // Stop any previous Kokoro clip before starting the new one.
+    if (kokoroAudio) {
+        try { kokoroAudio.pause(); } catch (e) { /* noop */ }
+        kokoroAudio = null;
+    }
+
+    const el = new Audio(audioUrl);
+    kokoroAudio = el;
+    const talkingInterval = startTalkingAnimation();
+
+    return new Promise((resolve, reject) => {
+        const cleanup = () => {
+            stopTalkingAnimation(talkingInterval);
+            URL.revokeObjectURL(audioUrl);
+            if (kokoroAudio === el) kokoroAudio = null;
+        };
+        el.onended = () => { cleanup(); resolve(); };
+        el.onerror = () => { cleanup(); reject(new Error('Kokoro audio playback error')); };
+        el.play().catch((err) => { cleanup(); reject(err); });
     });
 }
 window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();

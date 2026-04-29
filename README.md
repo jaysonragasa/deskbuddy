@@ -8,6 +8,7 @@ The face listens to you continuously, sends what you say to a local [Ollama](htt
 
 - Animated CSS eyes with 12 emotions (neutral, happy, sad, angry, surprised, wink, curious, skeptical, drowsy, sleeping, woke-up, shocked).
 - Continuous voice conversation (STT + TTS) tuned for mixed English / Tagalog (`tl-PH`).
+- Optional natural voice via [kokoro-js](https://www.npmjs.com/package/kokoro-js), running 100% in-browser (WebGPU when available, WASM fallback). Falls back to the browser's built-in voice if anything goes wrong.
 - Local AI inference through Ollama; conversation memory is preserved within a session.
 - Optional webcam face tracking with smoothed eye movement and a debug preview.
 - Idle personality: wanders and swaps emotions after 1 minute, falls asleep after 3 minutes, reacts with a shocked-then-happy greeting when a face reappears.
@@ -43,6 +44,10 @@ OLLAMA_ORIGINS="*" ollama serve
 
 **Windows**
 Add `OLLAMA_ORIGINS=*` to your System Environment Variables, fully quit Ollama from the system tray, and restart it.
+
+### Optional: natural voice via Kokoro TTS
+
+The app ships with a toggle for **kokoro-js**, a neural TTS that runs entirely in the browser (no server, no Docker, works on Vercel). Flip it on in the settings panel and pick a voice. First-time enable downloads ~90&nbsp;MB of model weights from Hugging Face; the browser caches them for later. WebGPU is used automatically when available (Chrome/Edge), otherwise it falls back to WASM. If anything fails, the app silently reverts to the built-in browser voice — conversations never break.
 
 ## Using it
 

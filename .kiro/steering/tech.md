@@ -13,13 +13,14 @@
 - **face-api.js model weights** loaded from `cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights` (only the `tinyFaceDetector` net is used).
 - **Google Fonts** — `Outfit` font family.
 - **Ollama HTTP API** at a user-configured URL (default `http://localhost:11434`), endpoints `/api/tags` and `/api/generate`.
+- **kokoro-js** `@1.2.1` (optional) — in-browser neural TTS. Loaded lazily via dynamic `import()` from `cdn.jsdelivr.net/npm/kokoro-js@1.2.1/dist/kokoro.web.js` only when the user toggles it on. Downloads the Kokoro-82M ONNX model from Hugging Face on first use (~90 MB with `dtype: "q8"`, cached by the browser after). Prefers WebGPU when `navigator.gpu` exists, falls back to WASM. `speakText` silently falls back to the browser's `SpeechSynthesis` on any failure.
 
 ## Browser APIs used
 
 - `SpeechRecognition` / `webkitSpeechRecognition` (continuous mode, `lang = 'tl-PH'`).
 - `SpeechSynthesis` / `SpeechSynthesisUtterance` (prefers a `tl` or `PH` voice when available).
 - `navigator.mediaDevices.getUserMedia` for the front camera (`320x240`).
-- `localStorage` for all settings persistence (`ollamaUrl`, `selectedModel`, `showSubtitles`, `visionEnabled`, `visionDebug`).
+- `localStorage` for all settings persistence (`ollamaUrl`, `selectedModel`, `showSubtitles`, `visionEnabled`, `visionDebug`, `kokoroEnabled`, `kokoroVoice`, `kokoroSpeed`).
 - `requestAnimationFrame` for the face-follow render loop.
 - `Fullscreen API`.
 

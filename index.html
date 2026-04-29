@@ -114,6 +114,31 @@
                     <span class="slider"></span>
                 </label>
             </div>
+
+            <div class="form-group setting-row">
+                <label style="margin:0;">Kokoro TTS (natural voice, in-browser)</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="toggle-kokoro">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label>Kokoro Voice</label>
+                <select id="kokoro-voice">
+                    <option value="af_heart">Load voices...</option>
+                </select>
+                <div class="help-text" style="background: rgba(0, 229, 255, 0.08); border-color: rgba(0, 229, 255, 0.2); color: var(--text-secondary);">
+                    Runs 100% in your browser via <a href="https://www.npmjs.com/package/kokoro-js" target="_blank" rel="noopener" style="color:var(--eye-color)">kokoro-js</a>.
+                    First-time enable downloads ~90&nbsp;MB of model weights (cached after).
+                    Prefers WebGPU when available, falls back to WASM. If anything fails, the browser's built-in voice is used.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Kokoro Speed: <span id="kokoro-speed-value">1.00</span>x</label>
+                <input type="range" id="kokoro-speed" min="0.5" max="1.5" step="0.05" value="1.0">
+            </div>
             
             <button class="btn btn-secondary" id="btn-clear-memory" style="font-size: 0.95rem; padding: 10px;">Clear Conversation Memory</button>
             
