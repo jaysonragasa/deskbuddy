@@ -18,15 +18,16 @@ const KOKORO_DTYPE = 'q8'; // ~90MB; good balance of size and quality
 // Device: kokoro-js's own README says WebGPU needs dtype="fp32" to work
 // correctly. With q8 quantization on WebGPU, ORT substitutes fallback
 // kernels for unsupported int8 ops and produces speech-shaped garbage
-// ("alien babble"). So q8 -> wasm, always. Set `kokoroForceWasm=false`
-// in localStorage to experiment otherwise, at your own risk.
+// ("alien babble"). So q8 -> wasm, always.
 const KOKORO_DEVICE = 'wasm';
 let kokoroEnabled = localStorage.getItem('kokoroEnabled') === 'true';
 let kokoroVoice = localStorage.getItem('kokoroVoice') || 'bm_fable';
 let kokoroSpeed = parseFloat(localStorage.getItem('kokoroSpeed')) || 1.0;
-let kokoroTTS = null;           // cached KokoroTTS instance
-let kokoroLoadPromise = null;   // in-flight load, so concurrent calls share it
 let kokoroAudio = null;         // currently-playing HTMLAudioElement
+let kokoroWorker = null;        // the ORT+Kokoro worker, owning the model
+let kokoroWorkerReady = null;   // Promise<void>, resolves when model is loaded
+let kokoroWorkerReqId = 0;      // monotonically increasing request id
+const kokoroWorkerPending = new Map(); // id -> { resolve, reject }
 
 // Vision / face-tracking state
 let visionInitialized = false;
@@ -642,90 +643,168 @@ function speakWithWebSpeech(text) {
     });
 }
 
-// ---- Kokoro TTS (in-browser, ES module from jsDelivr) ----
-// We dynamically import kokoro-js on first use so users who never enable it
-// don't pay the ~90 MB model download. Subsequent calls reuse the cached
-// KokoroTTS instance. Progress is surfaced via statusText.
-async function loadKokoroTTS() {
-    if (kokoroTTS) return kokoroTTS;
-    if (kokoroLoadPromise) return kokoroLoadPromise;
+// ---- Kokoro TTS (in-browser, running entirely in a Web Worker) ----
+// Phonemization (espeak-ng WASM) and result-tensor marshaling both block
+// the main thread when Kokoro runs here. ORT's `proxy: true` only moves
+// matmul ops to a worker — everything else still stalls the page. Moving
+// the whole pipeline into our own Worker keeps the UI responsive: blinks,
+// idle animations, face tracking, and the fullscreen button all keep
+// working while Kokoro generates.
+//
+// The worker source is constructed from a template string and loaded via
+// a Blob URL so the project stays single-file-flat. The worker itself is
+// an ES module so it can `import()` kokoro-js from jsDelivr.
 
-    kokoroLoadPromise = (async () => {
-        const prevStatus = statusText.innerText;
-        statusText.innerText = 'Loading Kokoro module...';
-        statusIndicator.className = 'status-indicator processing';
+const KOKORO_WORKER_SOURCE = `
+    let KokoroTTS = null;
+    let tts = null;
 
-        let mod;
+    async function init(opts) {
+        const mod = await import(opts.moduleUrl);
+        KokoroTTS = mod.KokoroTTS;
+        tts = await KokoroTTS.from_pretrained(opts.modelId, {
+            dtype: opts.dtype,
+            device: opts.device,
+            progress_callback: (data) => {
+                self.postMessage({ type: 'progress', data });
+            }
+        });
+        return {
+            // Ship the voice metadata back so the main thread can populate
+            // the dropdown without needing its own copy of kokoro-js.
+            voices: tts.voices
+        };
+    }
+
+    async function generate(opts) {
+        if (!tts) throw new Error('Kokoro not initialized');
+        const audio = await tts.generate(opts.text, {
+            voice: opts.voice,
+            speed: opts.speed
+        });
+        // RawAudio.toWav() returns a transferable ArrayBuffer; transferring
+        // avoids a copy back to the main thread (which would be a second
+        // source of jank on long utterances).
+        const wav = audio.toWav();
+        return { wav };
+    }
+
+    self.onmessage = async (e) => {
+        const { id, type, payload } = e.data;
         try {
-            mod = await import(KOKORO_MODULE_URL);
+            let result;
+            if (type === 'init')     result = await init(payload);
+            else if (type === 'gen') result = await generate(payload);
+            else throw new Error('Unknown message type: ' + type);
+
+            const transfer = (type === 'gen' && result && result.wav) ? [result.wav] : [];
+            self.postMessage({ id, ok: true, result }, transfer);
         } catch (err) {
-            statusText.innerText = 'Kokoro unavailable (using browser voice)';
-            statusIndicator.className = 'status-indicator';
-            throw err;
+            self.postMessage({ id, ok: false, error: err && err.message || String(err) });
         }
+    };
+`;
 
-        const { KokoroTTS } = mod;
+function buildKokoroWorker() {
+    const blob = new Blob([KOKORO_WORKER_SOURCE], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    const w = new Worker(url, { type: 'module' });
+    // URL can be revoked immediately; the Worker keeps its own reference.
+    URL.revokeObjectURL(url);
+    return w;
+}
 
-        // Device is pinned to "wasm" — see KOKORO_DEVICE comment at the
-        // top of the file for why WebGPU + q8 produces gibberish.
-        const device = KOKORO_DEVICE;
-        console.debug('[kokoro] device:', device, 'dtype:', KOKORO_DTYPE);
+function sendKokoroWorker(type, payload, transfer) {
+    const id = ++kokoroWorkerReqId;
+    return new Promise((resolve, reject) => {
+        kokoroWorkerPending.set(id, { resolve, reject });
+        kokoroWorker.postMessage({ id, type, payload }, transfer || []);
+    });
+}
 
-        statusText.innerText = `Downloading voice model (${device})...`;
+async function loadKokoroTTS() {
+    if (kokoroWorkerReady) return kokoroWorkerReady;
 
-        let lastPct = -1;
-        const progress_callback = (data) => {
-            if (!data) return;
-            // transformers.js emits { status, progress, file, ... }
-            if (data.status === 'progress' && typeof data.progress === 'number') {
-                const pct = Math.floor(data.progress);
-                if (pct !== lastPct) {
-                    lastPct = pct;
-                    statusText.innerText = `Downloading voice model... ${pct}%`;
-                }
-            } else if (data.status === 'ready' || data.status === 'done') {
+    const prevStatus = statusText.innerText;
+    statusText.innerText = 'Loading Kokoro module...';
+    statusIndicator.className = 'status-indicator processing';
+
+    kokoroWorker = buildKokoroWorker();
+
+    kokoroWorker.onmessage = (e) => {
+        const { id, ok, result, error, type, data } = e.data || {};
+        // Progress messages (no id) are broadcast events.
+        if (type === 'progress') {
+            if (data && data.status === 'progress' && typeof data.progress === 'number') {
+                statusText.innerText = 'Downloading voice model... ' + Math.floor(data.progress) + '%';
+            } else if (data && (data.status === 'ready' || data.status === 'done')) {
                 statusText.innerText = 'Voice model ready';
             }
-        };
+            return;
+        }
+        const pending = kokoroWorkerPending.get(id);
+        if (!pending) return;
+        kokoroWorkerPending.delete(id);
+        if (ok) pending.resolve(result);
+        else pending.reject(new Error(error || 'Kokoro worker error'));
+    };
 
+    kokoroWorker.onerror = (e) => {
+        console.error('[kokoro] worker error:', e.message || e);
+        // Fail every pending request so speakText can fall back.
+        for (const { reject } of kokoroWorkerPending.values()) {
+            reject(new Error('Kokoro worker crashed: ' + (e.message || 'unknown')));
+        }
+        kokoroWorkerPending.clear();
+        // Let a future call rebuild the worker from scratch.
+        kokoroWorkerReady = null;
+        if (kokoroWorker) {
+            try { kokoroWorker.terminate(); } catch (_) {}
+            kokoroWorker = null;
+        }
+    };
+
+    kokoroWorkerReady = (async () => {
+        console.debug('[kokoro] device:', KOKORO_DEVICE, 'dtype:', KOKORO_DTYPE);
         try {
-            kokoroTTS = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            const { voices } = await sendKokoroWorker('init', {
+                moduleUrl: KOKORO_MODULE_URL,
+                modelId: KOKORO_MODEL_ID,
                 dtype: KOKORO_DTYPE,
-                device,
-                progress_callback
+                device: KOKORO_DEVICE
             });
+            populateKokoroVoices(voices);
+            statusText.innerText = prevStatus && !prevStatus.startsWith('Downloading')
+                ? prevStatus
+                : 'Voice model ready';
+            statusIndicator.className = 'status-indicator listening';
         } catch (err) {
-            kokoroLoadPromise = null;
+            kokoroWorkerReady = null;
+            if (kokoroWorker) {
+                try { kokoroWorker.terminate(); } catch (_) {}
+                kokoroWorker = null;
+            }
             statusText.innerText = 'Kokoro load failed (using browser voice)';
             statusIndicator.className = 'status-indicator';
             throw err;
         }
-
-        // Populate the voice dropdown now that we know what the model supports.
-        populateKokoroVoices();
-
-        statusText.innerText = prevStatus && !prevStatus.startsWith('Downloading')
-            ? prevStatus
-            : 'Voice model ready';
-        statusIndicator.className = 'status-indicator listening';
-        return kokoroTTS;
     })();
 
-    return kokoroLoadPromise;
+    return kokoroWorkerReady;
 }
 
-function populateKokoroVoices() {
-    if (!kokoroVoiceSelect || !kokoroTTS || !kokoroTTS.voices) return;
-    const voiceIds = Object.keys(kokoroTTS.voices);
+function populateKokoroVoices(voices) {
+    if (!kokoroVoiceSelect || !voices) return;
+    const voiceIds = Object.keys(voices);
     if (voiceIds.length === 0) return;
 
     kokoroVoiceSelect.innerHTML = '';
     for (const id of voiceIds) {
-        const meta = kokoroTTS.voices[id] || {};
+        const meta = voices[id] || {};
         const opt = document.createElement('option');
         opt.value = id;
-        // e.g. "af_heart — American English 🚺 (A)"
-        const label = [id, meta.language, meta.gender, meta.overallGrade && `(${meta.overallGrade})`]
+        const gradePart = meta.overallGrade ? '(' + meta.overallGrade + ')' : '';
+        const label = [id, meta.language, meta.gender, gradePart]
             .filter(Boolean)
             .join(' · ');
         opt.textContent = label;
@@ -746,13 +825,8 @@ async function speakWithKokoro(text) {
     const cleaned = String(text).replace(/\[[^\]]*\]/g, '').trim();
     if (!cleaned) return;
 
-    const tts = await loadKokoroTTS();
+    await loadKokoroTTS();
 
-    // Diagnostic: log which voice we're actually using and what phonemes the
-    // phonemizer produced. If phonemes look like random non-English IPA or
-    // are empty, the phonemizer (espeak-ng via the `phonemizer` package) is
-    // the culprit — not the model. If phonemes look like reasonable English
-    // IPA but the audio is still gibberish, the ONNX backend is the culprit.
     const voiceToUse = kokoroVoice || 'af_heart';
     console.debug('[kokoro] generating:', {
         text: cleaned,
@@ -760,11 +834,14 @@ async function speakWithKokoro(text) {
         speed: kokoroSpeed
     });
 
-    const audio = await tts.generate(cleaned, {
+    const { wav } = await sendKokoroWorker('gen', {
+        text: cleaned,
         voice: voiceToUse,
         speed: Number.isFinite(kokoroSpeed) ? kokoroSpeed : 1.0
     });
-    const blob = audio.toBlob();
+
+    // wav is an ArrayBuffer transferred from the worker (zero-copy).
+    const blob = new Blob([wav], { type: 'audio/wav' });
     const audioUrl = URL.createObjectURL(blob);
 
     // Stop any previous Kokoro clip before starting the new one.
@@ -1106,9 +1183,11 @@ function startFaceFollowRender() {
 const GREETINGS = [
     "Oh, hi there!",
     "Hey, nice to see you!",
-    "Hello, friend!",
+    "Hello, there!",
     "Oh hello, you startled me!",
-    "Hi, welcome back!"
+    "Hi, welcome back!",
+    "What's up?!",
+    "Hey! Are you ok?!"
 ];
 
 async function triggerGreeting() {

@@ -39,7 +39,18 @@ Every engine implementation must:
 - The resulting `KokoroTTS` instance is cached in `kokoroTTS`. A concurrent `kokoroLoadPromise` protects against races so two quick turns don't trigger two loads.
 - Warm-up: `DOMContentLoaded` calls `loadKokoroTTS()` if `kokoroEnabled` is already true, and the toggle's `change` handler kicks it off when a user flips it on. Both warm-up paths swallow errors with `console.warn`.
 - Progress is surfaced via `statusText` (e.g. `Downloading voice model... 42%`) using `transformers.js`'s `progress_callback`. The status is cleared back to the previous message once the model is ready.
-- Device selection is `navigator.gpu ? 'webgpu' : 'wasm'`. Do not hard-code one; WebGPU is not available on Safari.
+- **Device is pinned to `"wasm"`**. kokoro-js's own README requires `dtype: "fp32"` to use WebGPU correctly; with `dtype: "q8"` on WebGPU, ORT substitutes fallback kernels for unsupported int8 ops and produces speech-shaped garbage ("alien babble"). Do not change this without also changing dtype.
+
+## ORT threading (`env.wasm.proxy`)
+
+Before `KokoroTTS.from_pretrained` runs, `loadKokoroTTS` imports `@huggingface/transformers` as a sibling module and flips two flags on its ORT env:
+
+- `env.backends.onnx.wasm.proxy = true` — moves the entire ORT runtime into a Web Worker. Without this, `tts.generate()` blocks the main thread for the full duration of inference (1–3 seconds per sentence on a laptop), which freezes every CSS animation, the idle timer, the blink interval, and face tracking.
+- `env.backends.onnx.wasm.numThreads` — set to `min(hardwareConcurrency, 4)` when `crossOriginIsolated` is true, else `1`. Multi-thread WASM requires `SharedArrayBuffer`, which requires the page to be served with COOP/COEP headers (see `vercel.json`).
+
+These flags **must be set before the first inference session is created**. Setting them after `from_pretrained` has no effect.
+
+The sibling transformers.js import reuses the same version that kokoro-js depends on (`^3.5.1`). The browser's module cache de-dupes the request, so there's no second download.
 
 ## Kokoro generation
 
